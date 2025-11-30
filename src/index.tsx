@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useReducer } from 'react';
 import { createRoot } from 'react-dom/client';
 import Papa from 'papaparse';
@@ -8,6 +7,7 @@ declare global {
         api: {
             send: (channel: string, data?: any) => void;
             on: (channel: string, func: (...args: any[]) => void) => void;
+            invoke: (channel: string, data?: any) => Promise<any>;
         }
     }
 }
@@ -156,7 +156,13 @@ const App = () => {
     const [state, dispatch] = useReducer(reducer, initialState);
     const [newCustomerName, setNewCustomerName] = useState('');
     const [newCustomerAddress, setNewCustomerAddress] = useState('');
+    const [newCustomerEmail, setNewCustomerEmail] = useState('');
+    const [newCustomerPhone, setNewCustomerPhone] = useState('');
+    const [newCustomerHourlyRate, setNewCustomerHourlyRate] = useState('');
     const [showAddCustomer, setShowAddCustomer] = useState(false);
+    const [settingsFilePath, setSettingsFilePath] = useState('');
+    const [customersFilePath, setCustomersFilePath] = useState('');
+    const [dataStatus, setDataStatus] = useState('idle'); // 'idle', 'loading', 'saving', 'success', 'error'
 
     // Local state for date inputs to allow partial/invalid user input without breaking the app state
     const [dateInputs, setDateInputs] = useState({
@@ -167,17 +173,15 @@ const App = () => {
 
     // Load initial data from Electron's main process
     useEffect(() => {
+        setDataStatus('loading'); // Set status to loading when data load is initiated
         window.api.on('data-loaded', (data) => {
-            if (data.settings) {
-                try {
+            try {
+                if (data.settings) {
                     dispatch({ type: 'SET_SETTINGS', payload: JSON.parse(data.settings) });
-                } catch (e) {
-                    console.error("Error parsing settings.json:", e);
                 }
-            }
-            if (data.customers !== undefined) { // Check if customer data is present, even if it's an empty string
-                 try {
-                    Papa.parse(data.customers, {
+                // Check if customers data is present, even if it's an empty string or null
+                if (data.customers !== undefined && data.customers !== null) { 
+                     Papa.parse(data.customers, {
                         header: true,
                         skipEmptyLines: true,
                         complete: (results) => {
@@ -185,13 +189,28 @@ const App = () => {
                                 id: parseInt(row.id, 10),
                                 name: row.name,
                                 address: row.address,
+                                email: row.email,
+                                phone: row.phone,
+                                hourlyRate: parseFloat(row.hourlyRate) || 0,
                             })).filter(c => c.id && c.name && c.address);
+                            console.log("Customers loaded from CSV:", customers);
                             dispatch({ type: 'SET_CUSTOMERS', payload: customers });
                         }
                     });
-                } catch (e) {
-                     console.error("Error parsing customers.csv:", e);
+                } else {
+                    dispatch({ type: 'SET_CUSTOMERS', payload: [] }); // Clear customers if no data or invalid data
                 }
+
+                if (data.settingsFilePath) {
+                    setSettingsFilePath(data.settingsFilePath);
+                }
+                if (data.customersFilePath) {
+                    setCustomersFilePath(data.customersFilePath);
+                }
+                setDataStatus('success'); // Set status to success if no errors
+            } catch (e) {
+                console.error("Error processing loaded data:", e);
+                setDataStatus('error'); // Set status to error if any exception occurs
             }
         });
 
@@ -252,7 +271,14 @@ const App = () => {
     }, [state.settings.theme]);
 
 
-    const handleAddCustomer = (e) => {
+    useEffect(() => {
+        if (dataStatus === 'success' || dataStatus === 'error') {
+            const timer = setTimeout(() => setDataStatus('idle'), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [dataStatus]);
+
+    const handleAddCustomer = async (e) => {
         e.preventDefault();
         if (newCustomerName.trim() && newCustomerAddress.trim()) {
             const newCustomerId = Math.max(0, ...state.customers.map(c => c.id)) + 1;
@@ -260,13 +286,28 @@ const App = () => {
                 id: newCustomerId,
                 name: newCustomerName,
                 address: newCustomerAddress,
+                email: newCustomerEmail,
+                phone: newCustomerPhone,
+                hourlyRate: parseFloat(newCustomerHourlyRate) || 0,
             };
             const newCustomers = [...state.customers, newCustomer];
             dispatch({ type: 'ADD_CUSTOMER', payload: newCustomer });
             dispatch({ type: 'UPDATE_INVOICE_FIELD', field: 'customer', value: newCustomerId.toString() });
-            window.api.send('save-customers', newCustomers);
+            
+            setDataStatus('saving');
+            console.log("Attempting to save new customers:", newCustomers);
+            const result = await window.api.invoke('save-customers', newCustomers);
+            if (result.success) {
+                setDataStatus('success');
+            } else {
+                setDataStatus('error');
+            }
+
             setNewCustomerName('');
             setNewCustomerAddress('');
+            setNewCustomerEmail('');
+            setNewCustomerPhone('');
+            setNewCustomerHourlyRate('');
             setShowAddCustomer(false);
         }
     };
@@ -341,6 +382,12 @@ const App = () => {
         doc.setFont('helvetica', 'normal');
         doc.text(customer.name, 14, 75);
         doc.text(customer.address, 14, 80);
+        if (customer.email) {
+            doc.text(customer.email, 14, 85);
+        }
+        if (customer.phone) {
+            doc.text(customer.phone, 14, 90);
+        }
 
         // Bank Info
         doc.setFont('helvetica', 'bold');
@@ -485,6 +532,13 @@ const App = () => {
                             <option value="" disabled>Select a customer</option>
                             {state.customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                         </select>
+                        {state.currentInvoice.customer && (
+                            <div className="customer-preview">
+                                <p><strong>Email:</strong> {state.customers.find(c => c.id === parseInt(state.currentInvoice.customer))?.email}</p>
+                                <p><strong>Phone:</strong> {state.customers.find(c => c.id === parseInt(state.currentInvoice.customer))?.phone}</p>
+                                <p><strong>Hourly Rate:</strong> {state.settings.currency} {state.customers.find(c => c.id === parseInt(state.currentInvoice.customer))?.hourlyRate.toFixed(2)}</p>
+                            </div>
+                        )}
                         <button onClick={() => setShowAddCustomer(!showAddCustomer)} className="secondary mt-1">
                             {showAddCustomer ? 'Cancel' : <><i className="fas fa-plus"></i> New Customer</>}
                         </button>
@@ -492,6 +546,9 @@ const App = () => {
                             <form onSubmit={handleAddCustomer} className="add-customer-form">
                                 <input type="text" placeholder="Customer Name" value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)} required />
                                 <input type="text" placeholder="Customer Address" value={newCustomerAddress} onChange={(e) => setNewCustomerAddress(e.target.value)} required />
+                                <input type="email" placeholder="Email Address" value={newCustomerEmail} onChange={(e) => setNewCustomerEmail(e.target.value)} />
+                                <input type="tel" placeholder="Phone Number" value={newCustomerPhone} onChange={(e) => setNewCustomerPhone(e.target.value)} />
+                                <input type="number" placeholder={`Default Hourly Rate (${state.settings.currency})`} value={newCustomerHourlyRate} onChange={(e) => setNewCustomerHourlyRate(e.target.value)} />
                                 <button type="submit" className="primary">Save Customer</button>
                             </form>
                         )}
@@ -695,24 +752,30 @@ const App = () => {
                     </section>
 
                     <section>
-                        <h2>Data Management</h2>
-                        <div className="form-grid">
-                            <div className="form-group">
-                                <label>Settings File</label>
-                                <button onClick={handleImportSettings} className="secondary">Import/Link Settings File</button>
+                        <h2>Data Management <span className={`data-status ${dataStatus}`}>{dataStatus === 'loading' && 'Loading...'}{dataStatus === 'saving' && 'Saving...'}{dataStatus === 'success' && 'Success!'}{dataStatus === 'error' && 'Error!'}</span></h2>
+                        <div className="data-management-subsection">
+                            <h3>Settings</h3>
+                            <div className="form-group full-width">
+                                <label>Settings File Path</label>
+                                <input type="text" value={settingsFilePath} readOnly className="file-path-input" />
+                                <button onClick={handleImportSettings} className="secondary button-inline">Import/Link Settings File</button>
                                 <p className="field-description">Link to an external settings.json file. Changes will be saved automatically to this file.</p>
                             </div>
-                            <div className="form-group">
+                            <div className="form-group full-width">
                                 <label>Export Settings</label>
                                 <button onClick={handleExportSettings} className="secondary">Export Settings</button>
                                 <p className="field-description">Save a copy of your current settings to a new JSON file.</p>
                             </div>
-                            <div className="form-group">
-                                <label>Customers File</label>
-                                <button onClick={handleImportCustomers} className="secondary">Import/Link Customers File</button>
+                        </div>
+                        <div className="data-management-subsection">
+                            <h3>Customers</h3>
+                            <div className="form-group full-width">
+                                <label>Customers File Path</label>
+                                <input type="text" value={customersFilePath} readOnly className="file-path-input" />
+                                <button onClick={handleImportCustomers} className="secondary button-inline">Import/Link Customers File</button>
                                 <p className="field-description">Link to an external customers.csv file. Changes will be saved automatically to this file.</p>
                             </div>
-                            <div className="form-group">
+                            <div className="form-group full-width">
                                 <label>Export Customer Data</label>
                                 <button onClick={handleCustomerCsvDownload} className="secondary">Export to CSV</button>
                                 <p className="field-description">Saves a backup of your customers to a CSV file in your downloads folder.</p>
@@ -820,7 +883,7 @@ const App = () => {
                     font-size: 0.875rem;
                     color: var(--text-color-light);
                 }
-                input[type="text"], input[type="number"], input[type="date"], input[type="file"], select {
+                input[type="text"], input[type="number"], input[type="date"], input[type="file"], input[type="email"], input[type="tel"], select {
                     width: 100%;
                     padding: 10px 12px;
                     background-color: var(--surface-color);
@@ -935,6 +998,20 @@ const App = () => {
                     display: grid;
                     gap: 12px;
                 }
+                .customer-preview {
+                    margin-top: 16px;
+                    padding: 16px;
+                    background-color: var(--background-color);
+                    border-radius: var(--border-radius);
+                    border: 1px solid var(--border-color);
+                }
+                .customer-preview p {
+                    margin: 0 0 8px 0;
+                    color: var(--text-color-light);
+                }
+                .customer-preview p:last-child {
+                    margin-bottom: 0;
+                }
                 .actions {
                     display: flex;
                     justify-content: flex-end;
@@ -951,8 +1028,71 @@ const App = () => {
                     grid-template-columns: 1fr 1fr;
                     gap: 16px 24px;
                 }
+                .settings-form .form-grid.single-column {
+                    grid-template-columns: 1fr;
+                }
+                .data-management-subsection {
+                    padding-bottom: 24px;
+                    border-bottom: 1px solid var(--border-color);
+                    margin-bottom: 24px;
+                }
+                .data-management-subsection:last-of-type {
+                    border-bottom: none;
+                    margin-bottom: 0;
+                }
+                .data-management-subsection h3 {
+                    font-size: 1rem;
+                    margin-top: 0;
+                    margin-bottom: 16px;
+                    color: var(--text-color);
+                }
                 .form-group.full-width {
                     grid-column: 1 / -1;
+                }
+                .file-path-container {
+                    display: flex;
+                    align-items: center;
+                    margin-bottom: 8px;
+                }
+                .file-path-container .file-path-input {
+                    flex-grow: 1;
+                    margin-bottom: 0;
+                    margin-right: 8px;
+                }
+                .file-path-container .button-inline {
+                    flex-shrink: 0;
+                }
+                .button-inline {
+                    margin-right: 8px; /* Spacing between inline buttons */
+                }
+                .button-inline:last-child {
+                    margin-right: 0;
+                }
+                .button-inline.danger {
+                    color: var(--danger-color);
+                    border-color: var(--danger-color);
+                }
+                .button-inline.danger:hover {
+                    background-color: color-mix(in srgb, var(--danger-color) 10%, var(--surface-color));
+                }
+                .data-status {
+                    margin-left: 16px;
+                    font-size: 0.9rem;
+                    font-weight: 500;
+                    opacity: 0;
+                    transition: opacity 0.3s;
+                }
+                .data-status.loading, .data-status.saving {
+                    color: var(--secondary-color);
+                    opacity: 1;
+                }
+                .data-status.success {
+                    color: #28a745;
+                    opacity: 1;
+                }
+                .data-status.error {
+                    color: var(--danger-color);
+                    opacity: 1;
                 }
                 .company-icon-preview {
                     max-width: 100px;

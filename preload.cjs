@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   invoke: (channel, data) => {
     console.log(`Preload: Invoking IPC channel '${channel}'`);
-    let validChannels = ['show-open-dialog'];
+    let validChannels = ['show-open-dialog', 'save-customers'];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);
     }

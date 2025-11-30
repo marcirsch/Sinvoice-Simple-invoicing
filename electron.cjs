@@ -45,7 +45,11 @@ function saveAppState() {
 
 function registerIpcHandlers() {
     function loadAndSendData(win) {
-        const data = {};
+        const data = {
+            settingsFilePath: settingsFilePath,
+            customersFilePath: customersFilePath,
+            dataDirPath: dataDirPath // Expose dataDirPath
+        };
         try {
             if (fs.existsSync(settingsFilePath)) {
                 data.settings = fs.readFileSync(settingsFilePath, 'utf-8');
@@ -71,12 +75,15 @@ function registerIpcHandlers() {
         }
     });
 
-    ipcMain.on('save-customers', (event, customers) => {
+    ipcMain.handle('save-customers', (event, customers) => {
         try {
             const csv = Papa.unparse(customers);
+            console.log("Attempting to save customers to:", customersFilePath); // Added log
             fs.writeFileSync(customersFilePath, csv);
+            return { success: true };
         } catch (e) {
             console.error("Failed to save customers:", e);
+            return { success: false, error: e.message };
         }
     });
 
