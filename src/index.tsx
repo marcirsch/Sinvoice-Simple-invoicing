@@ -1,6 +1,16 @@
 
 import React, { useState, useEffect, useReducer } from 'react';
 import { createRoot } from 'react-dom/client';
+import Papa from 'papaparse';
+
+declare global {
+    interface Window {
+        api: {
+            send: (channel: string, data?: any) => void;
+            on: (channel: string, func: (...args: any[]) => void) => void;
+        }
+    }
+}
 
 const initialState = {
     customers: [],
@@ -155,40 +165,57 @@ const App = () => {
         items: {}
     });
 
+    // Load initial data from Electron's main process
     useEffect(() => {
-        // Mock loading customers and settings
-        const loadedCustomers = [
-            { id: 1, name: 'John Doe', address: '123 Main St, Anytown, USA' },
-            { id: 2, name: 'Jane Smith', address: '456 Oak Ave, Sometown, USA' },
-        ];
-        dispatch({ type: 'SET_CUSTOMERS', payload: loadedCustomers });
+        window.api.on('data-loaded', (data) => {
+            if (data.settings) {
+                try {
+                    dispatch({ type: 'SET_SETTINGS', payload: JSON.parse(data.settings) });
+                } catch (e) {
+                    console.error("Error parsing settings.json:", e);
+                }
+            }
+            if (data.customers) {
+                 try {
+                    Papa.parse(data.customers, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: (results) => {
+                            const customers = results.data.map(row => ({
+                                id: parseInt(row.id, 10),
+                                name: row.name,
+                                address: row.address,
+                            })).filter(c => c.id && c.name && c.address);
+                            dispatch({ type: 'SET_CUSTOMERS', payload: customers });
+                        }
+                    });
+                } catch (e) {
+                     console.error("Error parsing customers.csv:", e);
+                }
+            }
+        });
 
-        const loadedSettings = {
-            companyName: 'My Awesome Company',
-            companyAddress: '789 Pine Ln, Yourtown, USA',
-            companyIcon: '', // Will be base64
-            deadlineDays: 10,
-            defaultHourlyRate: 75,
-            bankName: 'Global Bank',
-            bankAccountNumber: '123-456-7890',
-            footerText: 'Thank you for your business!',
-            invoicePrefix: 'INV',
-            invoiceNumber: 101,
-            outputPdfPath: '/Users/me/Documents/Invoices',
-            currency: 'CHF',
-            theme: 'system',
-            dateFormat: 'yyyy/mm/dd',
-        };
-        dispatch({ type: 'SET_SETTINGS', payload: loadedSettings });
+        window.api.send('load-data');
         
+        // Initialize invoice dates
         const initialInvoiceDate = new Date().toISOString().split('T')[0];
-        const initialDueDate = calculateDueDate(initialInvoiceDate, loadedSettings.deadlineDays);
+        const initialDueDate = calculateDueDate(initialInvoiceDate, initialState.settings.deadlineDays);
         dispatch({ type: 'UPDATE_INVOICE_FIELD', field: 'invoiceDate', value: initialInvoiceDate});
         dispatch({ type: 'UPDATE_INVOICE_FIELD', field: 'dueDate', value: initialDueDate});
-
-        // Set initial invoice item rate from loaded settings
-        dispatch({ type: 'UPDATE_INVOICE_ITEM', index: 0, field: 'rate', value: loadedSettings.defaultHourlyRate });
     }, []);
+
+    // Save settings to file whenever they change
+    useEffect(() => {
+        // The initial state dispatch on load will trigger this, so we need to avoid saving an empty object
+        if (state.settings.companyName) { 
+             window.api.send('save-settings', state.settings);
+        }
+    }, [state.settings]);
+
+    // Save customers to file whenever they change
+    useEffect(() => {
+        window.api.send('save-customers', state.customers);
+    }, [state.customers]);
     
     // Sync local date input state when global state or format changes
     useEffect(() => {
@@ -395,6 +422,43 @@ const App = () => {
                 dispatch({ type: 'SET_SETTINGS', payload: { companyIcon: event.target.result } });
             };
             reader.readAsDataURL(file);
+        }
+    };
+
+    const handleCustomerCsvDownload = () => {
+        const csv = Papa.unparse(state.customers);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        if (link.download !== undefined) {
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "customers.csv");
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    };
+
+    const handleImportSettings = async () => {
+        const filePath = await window.api.invoke('show-open-dialog');
+        if (filePath) {
+            window.api.send('set-settings-path-and-reload', filePath);
+        }
+    };
+
+    const handleExportSettings = () => {
+        const json = JSON.stringify(state.settings, null, 2);
+        const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
+        const link = document.createElement("a");
+        if (link.download !== undefined) {
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "settings.json");
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
     };
 
@@ -622,6 +686,27 @@ const App = () => {
                                     <option value="dark">Dark</option>
                                     <option value="system">System</option>
                                 </select>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section>
+                        <h2>Data Management</h2>
+                        <div className="form-grid">
+                            <div className="form-group">
+                                <label>Settings File</label>
+                                <button onClick={handleImportSettings} className="secondary">Import/Link Settings File</button>
+                                <p className="field-description">Link to an external settings.json file. Changes will be saved automatically to this file.</p>
+                            </div>
+                            <div className="form-group">
+                                <label>Export Settings</label>
+                                <button onClick={handleExportSettings} className="secondary">Export Settings</button>
+                                <p className="field-description">Save a copy of your current settings to a new JSON file.</p>
+                            </div>
+                            <div className="form-group">
+                                <label>Export Customer Data</label>
+                                <button onClick={handleCustomerCsvDownload} className="secondary">Export to CSV</button>
+                                <p className="field-description">Saves a backup of your customers to a CSV file in your downloads folder.</p>
                             </div>
                         </div>
                     </section>
