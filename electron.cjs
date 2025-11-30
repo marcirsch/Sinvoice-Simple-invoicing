@@ -13,7 +13,7 @@ if (!fs.existsSync(dataDirPath)) {
 }
 const appStatePath = path.join(userDataPath, 'app_state.json');
 let settingsFilePath = path.join(dataDirPath, 'settings.json'); // Default path
-const customersFilePath = path.join(dataDirPath, 'customers.csv');
+let customersFilePath = path.join(dataDirPath, 'customers.csv');
 
 function loadAppState() {
     try {
@@ -21,6 +21,9 @@ function loadAppState() {
             const state = JSON.parse(fs.readFileSync(appStatePath, 'utf-8'));
             if (state.customSettingsPath && fs.existsSync(state.customSettingsPath)) {
                 settingsFilePath = state.customSettingsPath;
+            }
+            if (state.customCustomersPath && fs.existsSync(state.customCustomersPath)) {
+                customersFilePath = state.customCustomersPath;
             }
         }
     } catch (e) {
@@ -30,7 +33,10 @@ function loadAppState() {
 
 function saveAppState() {
     try {
-        const state = { customSettingsPath: settingsFilePath };
+        const state = { 
+            customSettingsPath: settingsFilePath,
+            customCustomersPath: customersFilePath 
+        };
         fs.writeFileSync(appStatePath, JSON.stringify(state, null, 2));
     } catch (e) {
         console.error("Failed to save app state:", e);
@@ -74,18 +80,33 @@ function registerIpcHandlers() {
         }
     });
 
-    ipcMain.handle('show-open-dialog', async () => {
+    ipcMain.handle('show-open-dialog', async (event, filters) => {
         const { filePaths } = await dialog.showOpenDialog({
             properties: ['openFile'],
-            filters: [{ name: 'JSON', extensions: ['json'] }]
+            filters: filters
         });
         return filePaths[0];
     });
 
     ipcMain.on('set-settings-path-and-reload', (event, filePath) => {
         const win = BrowserWindow.fromWebContents(event.sender);
-        if (filePath && fs.existsSync(filePath)) {
+        if (filePath) {
+            if (!fs.existsSync(filePath)) {
+                fs.writeFileSync(filePath, ''); // Create the file if it doesn't exist
+            }
             settingsFilePath = filePath;
+            saveAppState();
+            loadAndSendData(win);
+        }
+    });
+
+    ipcMain.on('set-customers-path-and-reload', (event, filePath) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        if (filePath) {
+            if (!fs.existsSync(filePath)) {
+                fs.writeFileSync(filePath, ''); // Create the file if it doesn't exist
+            }
+            customersFilePath = filePath;
             saveAppState();
             loadAndSendData(win);
         }

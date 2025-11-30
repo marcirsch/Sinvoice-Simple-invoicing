@@ -175,7 +175,7 @@ const App = () => {
                     console.error("Error parsing settings.json:", e);
                 }
             }
-            if (data.customers) {
+            if (data.customers !== undefined) { // Check if customer data is present, even if it's an empty string
                  try {
                     Papa.parse(data.customers, {
                         header: true,
@@ -212,11 +212,6 @@ const App = () => {
         }
     }, [state.settings]);
 
-    // Save customers to file whenever they change
-    useEffect(() => {
-        window.api.send('save-customers', state.customers);
-    }, [state.customers]);
-    
     // Sync local date input state when global state or format changes
     useEffect(() => {
         setDateInputs(prev => ({
@@ -266,8 +261,10 @@ const App = () => {
                 name: newCustomerName,
                 address: newCustomerAddress,
             };
+            const newCustomers = [...state.customers, newCustomer];
             dispatch({ type: 'ADD_CUSTOMER', payload: newCustomer });
             dispatch({ type: 'UPDATE_INVOICE_FIELD', field: 'customer', value: newCustomerId.toString() });
+            window.api.send('save-customers', newCustomers);
             setNewCustomerName('');
             setNewCustomerAddress('');
             setShowAddCustomer(false);
@@ -441,9 +438,16 @@ const App = () => {
     };
 
     const handleImportSettings = async () => {
-        const filePath = await window.api.invoke('show-open-dialog');
+        const filePath = await window.api.invoke('show-open-dialog', [{ name: 'JSON', extensions: ['json'] }]);
         if (filePath) {
             window.api.send('set-settings-path-and-reload', filePath);
+        }
+    };
+
+    const handleImportCustomers = async () => {
+        const filePath = await window.api.invoke('show-open-dialog', [{ name: 'CSV', extensions: ['csv'] }]);
+        if (filePath) {
+            window.api.send('set-customers-path-and-reload', filePath);
         }
     };
 
@@ -702,6 +706,11 @@ const App = () => {
                                 <label>Export Settings</label>
                                 <button onClick={handleExportSettings} className="secondary">Export Settings</button>
                                 <p className="field-description">Save a copy of your current settings to a new JSON file.</p>
+                            </div>
+                            <div className="form-group">
+                                <label>Customers File</label>
+                                <button onClick={handleImportCustomers} className="secondary">Import/Link Customers File</button>
+                                <p className="field-description">Link to an external customers.csv file. Changes will be saved automatically to this file.</p>
                             </div>
                             <div className="form-group">
                                 <label>Export Customer Data</label>

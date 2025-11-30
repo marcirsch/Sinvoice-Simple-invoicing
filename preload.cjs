@@ -5,7 +5,7 @@ console.log("---- Preload Script Loading ----");
 contextBridge.exposeInMainWorld('api', {
   send: (channel, data) => {
     // whitelist channels
-    let validChannels = ['save-customers', 'save-settings', 'load-data', 'set-settings-path-and-reload'];
+    let validChannels = ['save-customers', 'save-settings', 'load-data', 'set-settings-path-and-reload', 'set-customers-path-and-reload'];
     if (validChannels.includes(channel)) {
       ipcRenderer.send(channel, data);
     }
